@@ -25,7 +25,17 @@ void weapons_reset(void);
 void weapons_map_start(void);
 void weapons_clear_world(void);
 int  weapons_current(void);
-void weapons_think(float dt, const float *view_angles, bool fire, bool fire2, bool reload, int select_dir, bool can_fire);
+
+typedef enum {
+    WEAPON_SELECT_NONE,
+    WEAPON_SELECT_PREV_SLOT,
+    WEAPON_SELECT_NEXT_SLOT,
+    WEAPON_SELECT_PREV_POS,
+    WEAPON_SELECT_NEXT_POS,
+} weapon_selection_t;
+
+void weapons_think(float dt, const float *view_angles, bool fire, bool fire2, bool reload,
+                   weapon_selection_t selection, bool can_fire);
 void weapons_draw3d(const float *eye, const float *angles, const uint8_t *light);
 void weapons_draw_effects(void);
 void weapons_draw_hud(float dt, bool show_crosshair);

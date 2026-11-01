@@ -96,7 +96,7 @@ float game_view_pitch(void) { return view_angles[0]; }
 static char cur_map[32];
 static float arrive_origin[3], arrive_angles[3];
 static PCTX bool weapon_fire, weapon_fire2, weapon_reload;
-static PCTX int weapon_select;
+static PCTX weapon_selection_t weapon_select;
 
 void game_add_view_yaw(float dyaw) { view_angles[1] = fmodf(view_angles[1] + dyaw + 360.0f, 360.0f); }
 
@@ -980,12 +980,15 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
     if (view_angles[0] > 89) view_angles[0] = 89;
     if (view_angles[0] < -89) view_angles[0] = -89;
     view_angles[1] = fmodf(view_angles[1] + 360.0f, 360.0f);
-    // Z fires, R is the secondary attack, L ducks; the D-pad picks weapons (left/right),
-    // reloads (down) and switches the flashlight (up)
-    // the action buttons go through the mapping in Options -> Controller Settings -> Button Mapping
+    // Mode shift replaces fire, jump and use with the shifted mapping layer.
+    // Duck and both axes of weapon selection remain available in either layer.
     const uint8_t *bd = settings.bind;
     pad_stick_update(&in);
-    bool b_jump = pad_held(&in, bd[BIND_JUMP]), b_duck = pad_held(&in, bd[BIND_DUCK]);
+    bool mode_shift = pad_held(&in, bd[BIND_MODE_SHIFT]);
+    bool jump_held = pad_held(&in, bd[BIND_JUMP]);
+    bool b_jump = !mode_shift && jump_held;
+    bool b_duck = pad_held(&in, bd[BIND_DUCK]);
+    bool flashlight_pressed = mode_shift && pad_pressed(&pressed, bd[BIND_FLASHLIGHT]);
     if (b_jump) input.buttons |= IN_JUMP;
     if (b_duck) input.buttons |= IN_DUCK;
     {   // PS2-style crouch-jump: keep jump held after jumping and the legs tuck up in the air
@@ -995,10 +998,10 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         extern int pm_get_waterlevel(void);
         if (a_held > 0.2f && pm_get_groundent() < 0 && !noclip && pm_get_waterlevel() < 2) input.buttons |= IN_DUCK;
     }
-    if (pad_held(&in, bd[BIND_USE])) input.buttons |= IN_USE;
-    weapon_fire = pad_held(&in, bd[BIND_FIRE]);
-    weapon_fire2 = pad_held(&in, bd[BIND_ALTFIRE]);
-    weapon_reload = pad_pressed(&pressed, bd[BIND_RELOAD]);
+    if (!mode_shift && pad_held(&in, bd[BIND_USE])) input.buttons |= IN_USE;
+    weapon_fire = !mode_shift && pad_held(&in, bd[BIND_FIRE]);
+    weapon_fire2 = mode_shift && pad_held(&in, bd[BIND_ALTFIRE]);
+    weapon_reload = mode_shift && pad_pressed(&pressed, bd[BIND_RELOAD]);
     // a GameCube controller (JoyBus, through a plug adapter): X reloads and Y uses unless the
     // mapping already gives them a job
     bool gcn = joypad_get_style(cur_port) == JOYPAD_STYLE_GCN;
@@ -1008,8 +1011,20 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         if (!x_bound && pressed.x) weapon_reload = true;
         if (!y_bound && in.btn.y) input.buttons |= IN_USE;
     }
-    weapon_select = pad_pressed(&pressed, bd[BIND_NEXTWEAP]) ? 1 : (pad_pressed(&pressed, bd[BIND_PREVWEAP]) ? -1 : 0);
-    if (pad_pressed(&pressed, bd[BIND_FLASHLIGHT]) && !(settings.cheats && b_duck && b_jump)) player_toggle_flashlight();
+    weapon_select = WEAPON_SELECT_NONE;
+    int weapon_pad = settings_weapon_pad();
+    if (pad_pressed(&pressed, weapon_pad + 2)) weapon_select = WEAPON_SELECT_PREV_SLOT;
+    else if (pad_pressed(&pressed, weapon_pad + 3)) weapon_select = WEAPON_SELECT_NEXT_SLOT;
+    else if (pad_pressed(&pressed, weapon_pad)) weapon_select = WEAPON_SELECT_PREV_POS;
+    else if (pad_pressed(&pressed, weapon_pad + 1)) weapon_select = WEAPON_SELECT_NEXT_POS;
+
+    // Cheat chords use the physical jump button even while its normal action is shifted.
+    bool cheat_chord = settings.cheats && b_duck && jump_held;
+    bool cheat_noclip = cheat_chord && pad_pressed(&pressed, weapon_pad);
+    bool cheat_give_all = cheat_chord && pad_pressed(&pressed, weapon_pad + 1);
+    if (cheat_noclip || cheat_give_all) weapon_select = WEAPON_SELECT_NONE;
+
+    if (flashlight_pressed) player_toggle_flashlight();
     // driving a train: forward/back change speed in steps, a deliberate sidestep gets off
     if (ents_player_driving()) {
         if (fwd > speed * 0.5f) input.buttons |= IN_FORWARD;
@@ -1036,9 +1051,9 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         if (b_jump) input.up += speed;
         if (b_duck) input.up -= speed;
     }
-    // cheats: duck + jump + flashlight toggles noclip, duck + jump + reload gives every weapon (impulse 101)
-    if (settings.cheats && b_duck && b_jump && pad_pressed(&pressed, bd[BIND_FLASHLIGHT])) noclip = !noclip;
-    if ((settings.cheats && b_duck && b_jump && pad_pressed(&pressed, bd[BIND_RELOAD])) || dbg_give_all) {
+    // Duck + jump + weapon-selection up toggles noclip; down gives impulse 101.
+    if (cheat_noclip) noclip = !noclip;
+    if (cheat_give_all || dbg_give_all) {
         dbg_give_all = false;
         static const char *all[] = {"item_suit", "weapon_crowbar", "weapon_9mmhandgun", "weapon_357", "weapon_9mmAR", "weapon_shotgun",
                                     "weapon_crossbow", "weapon_rpg", "weapon_gauss", "weapon_egon", "weapon_hornetgun",

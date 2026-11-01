@@ -4,6 +4,19 @@
 #include <libdragon.h>
 #include <stdbool.h>
 
+// Shifted actions have a separate mapping layer and may share normal-layer buttons.
+enum {
+    BIND_FIRE,
+    BIND_JUMP,
+    BIND_DUCK,
+    BIND_USE,
+    BIND_MODE_SHIFT,
+    BIND_ALTFIRE,
+    BIND_RELOAD,
+    BIND_FLASHLIGHT,
+    NUM_BINDS
+};
+
 typedef struct {
     int  control_scheme;   // 0 = stick moves / C looks, 1 = stick looks / C moves, 2 = stick moves + turns
     bool invert_y;
@@ -11,18 +24,20 @@ typedef struct {
     int  volume;           // 0..10
     bool show_stats;
     bool crosshair;
-    bool cheats;           // L = noclip
+    bool cheats;           // enables cheat menu and controller chords
     int  skill;            // 1..3
-    uint8_t bind[9];       // button for each action (BIND_*), PAD_* values
+    uint8_t bind[NUM_BINDS]; // button for each action (BIND_*), PAD_* values
+    uint8_t reserved[4];    // preserves the saved-settings layout
 } settings_t;
 
 // remappable actions and the pad buttons they can go on
-enum { BIND_FIRE, BIND_ALTFIRE, BIND_JUMP, BIND_DUCK, BIND_USE, BIND_RELOAD, BIND_FLASHLIGHT, BIND_PREVWEAP, BIND_NEXTWEAP, NUM_BINDS };
 enum { PAD_A, PAD_B, PAD_Z, PAD_L, PAD_R, PAD_DU, PAD_DD, PAD_DL, PAD_DR, PAD_CU, PAD_CD, PAD_CL, PAD_CR,
        PAD_SU, PAD_SD, PAD_SL, PAD_SR,   // S*: the stick pushed that way (schemes that leave it free)
        PAD_X, PAD_Y, NUM_PADS };          // a GameCube controller's X and Y
 #define NUM_SCHEMES 5
-void settings_fit_binds(void);
+void settings_validate_binds(void);
+int settings_weapon_pad(void); // up direction of the scheme's weapon-selection input
+bool pad_remappable(int pad);
 void pad_stick_update(const joypad_inputs_t *in);
 extern const char *bind_names[NUM_BINDS];
 extern const char *pad_names[NUM_PADS];

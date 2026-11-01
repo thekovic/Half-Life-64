@@ -169,27 +169,42 @@ It is built from:
 
 | Button | Action |
 |---|---|
-| Analog stick | Move and strafe |
-| C buttons | Look (left/right turn, up/down look) |
+| Analog stick | Look |
+| C buttons | Move and strafe |
 | Z | Fire |
-| R | Alternate fire (MP5 grenade, double barrel, gauss charge, RPG laser, satchel detonator...) |
-| A | Jump |
-| L | Duck (hold A while ducking for the long jump) |
+| R | Jump (hold after jumping to tuck your legs) |
+| A | Mode shift (hold) |
+| L | Duck (press R while ducking for the long jump) |
 | B | Use: doors, buttons, chargers and valves (hold), scientists and Barney (follow / wait). On a train or a mounted gun: take or leave the controls |
-| D-pad left / right | Previous / next weapon |
-| D-pad down | Reload |
-| D-pad up | Flashlight |
-| Stick up/down while driving a train | Faster / slower (four steps each way, as on PC) |
-| Start | Pause menu (in Head-To-Head, either player can pause) |
-| Cheats (tick "Enable cheats" in Options → Controls → Advanced first): L + D-pad up | Noclip |
-| Cheats: L + D-pad down | Every weapon and full ammo (impulse 101) |
+| A + Z | Alternate fire (MP5 grenade, double barrel, gauss charge, RPG laser, satchel detonator...) |
+| A + B | Reload |
+| A + R | Toggle flashlight |
+| D-pad left / right | Previous / next weapon category; start at its first owned weapon |
+| D-pad up / down | Previous / next weapon within the selected category |
+| C-up/down while driving a train | Faster / slower (four steps each way, as on PC) |
+| Start | Pause menu |
+| Cheats (tick "Enable cheats" in Options → Controls → Advanced first): hold Jump + Duck, press weapon-selection Up (default: R + L + D-pad up) | Noclip |
+| Cheats: hold Jump + Duck, press weapon-selection Down (default: R + L + D-pad down) | Every weapon and full ammo (impulse 101) |
 | Cheats: Options → Cheat Codes | God mode, noclip, give everything, and go to any map |
 
-Four other layouts are in **Options → Controls**: stick looks / C buttons move (Turok style),
+Four other layouts are in **Options → Controller Settings**: stick moves / C buttons look,
 stick moves and turns (GoldenEye 1.1), D-pad moves / stick looks, and D-pad moves / C buttons look
-(the input those leave free takes over weapons, reload and flashlight). Every action can be
-remapped, and look sensitivity and "Reverse up-down axis" are there too. A GameCube controller
-works as well: X reloads, Y uses and the C-stick looks. In menus, use the D-pad or stick, A to choose, B to go back, Z/R to change tabs.
+(the input those leave free takes over both axes of weapon selection). Weapon navigation wraps,
+skipping unowned weapons and empty categories. While Mode Shift is held, normal fire, jump and
+use are suppressed; duck and weapon selection remain available.
+
+Fire, jump, duck, use, Mode Shift and the three shifted actions can be remapped in **Button
+Mapping**. Weapon selection always uses the directional input left free by the selected scheme
+and cannot be remapped. Directional inputs cannot be assigned to other actions.
+Normal and shifted actions may share a button. Conflicts within a layer swap bindings;
+remapping Mode Shift or duck swaps the affected buttons across both layers so those actions
+stay distinct. Look sensitivity and "Reverse up-down axis" are available
+in the advanced settings. Older saved controls reset to this layout on first load, preserving
+other preferences and game saves.
+
+A GameCube controller works as well: X reloads and Y uses unless assigned another action;
+the C-stick looks in the "Stick moves, C looks" scheme. In menus, use the D-pad or stick,
+A to choose, B to go back, Z/R to change tabs.
 
 **An Expansion Pak (8 MB) is required.** Large maps decompress to about 3 MB. Saves use the
 cartridge's 32 KB SRAM (set the save type to SRAM 256k on a flashcart or emulator), and a

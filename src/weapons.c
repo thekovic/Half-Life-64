@@ -1000,6 +1000,61 @@ static void select_next(int dir)
     snd_emit(0, CHAN_ITEM, "common/wpn_moveselect.wav", 1, ATTN_NORM, PITCH_NORM, NULL);
 }
 
+static int owned_weapon_at(int slot, int pos)
+{
+    for (int i = 1; i < NUM_W; i++) {
+        if (W[i].id && W[i].slot == slot && W[i].pos == pos &&
+            (player.weapons & (1u << W[i].id))) {
+            return W[i].id;
+        }
+    }
+
+    return 0;
+}
+
+static void select_weapon(weapon_selection_t selection)
+{
+    const wdef_t *base = wdef(pending ? pending : cur);
+    bool change_slot = selection == WEAPON_SELECT_PREV_SLOT || selection == WEAPON_SELECT_NEXT_SLOT;
+    int direction = selection == WEAPON_SELECT_PREV_SLOT || selection == WEAPON_SELECT_PREV_POS ? -1 : 1;
+    int slot = base ? base->slot : 0;
+    int pos = base ? base->pos : 0;
+    int pick = 0;
+
+    // Start with the first owned weapon when none is currently equipped.
+    if (!base) {
+        for (int s = 0; s < 5 && !pick; s++) {
+            for (int p = 0; p < 5 && !pick; p++) {
+                pick = owned_weapon_at(s, p);
+            }
+        }
+    } else if (change_slot) {
+        for (int step = 1; step < 5 && !pick; step++) {
+            int next_slot = (slot + direction * step + 5) % 5;
+
+            // A new category always starts at pos 0, skipping positions not owned.
+            for (int p = 0; p < 5 && !pick; p++) {
+                pick = owned_weapon_at(next_slot, p);
+            }
+        }
+
+        // With no other owned category, keep the current position unchanged.
+        if (!pick) pick = owned_weapon_at(slot, pos);
+    } else {
+        for (int step = 1; step <= 5 && !pick; step++) {
+            int next_pos = (pos + direction * step + 5) % 5;
+            pick = owned_weapon_at(slot, next_pos);
+        }
+    }
+
+    if (!pick) return;
+
+    pending = pick;
+    select_show = 1.5f;
+    select_slot = W[pick].slot;
+    snd_emit(0, CHAN_ITEM, "common/wpn_moveselect.wav", 1, ATTN_NORM, PITCH_NORM, NULL);
+}
+
 // ------------------------------------------------------------------ aiming
 static PCTX float aim_dir[3];
 void weapons_aim(float *f) { memcpy(f, aim_dir, 12); }
@@ -1692,8 +1747,8 @@ static void egon_stop(void)
     next_attack = wtime + 0.5f;
 }
 
-void weapons_think(float dt, const float *view_angles, bool fire, bool fire2, bool reload_pressed, int select_dir,
-                   bool can_fire)
+void weapons_think(float dt, const float *view_angles, bool fire, bool fire2, bool reload_pressed,
+                   weapon_selection_t selection, bool can_fire)
 {
     if (!h2h_active || h2h_cur == 0) wtime += dt;   // one clock for both Head-To-Head players
     bob_t += dt;
@@ -1790,10 +1845,10 @@ void weapons_think(float dt, const float *view_angles, bool fire, bool fire2, bo
         player.ammo[AM_HORNET]++;
         hornet_regen = wtime + 0.5f;
     }
-    if (select_dir) select_next(select_dir);
+    if (selection != WEAPON_SELECT_NONE) select_weapon(selection);
     if (!player_alive()) { egon_stop(); return; }
     // switching: holster, then deploy (instant selection like the PC's HUD menu)
-    if (pending && pending != cur && (fire || select_dir == 0)) {
+    if (pending && pending != cur && (fire || selection == WEAPON_SELECT_NONE)) {
         if (!(player.weapons & (1u << pending))) pending = 0;
         else if (select_show <= 1.0f || fire) { egon_stop(); deploy(pending); }
     }

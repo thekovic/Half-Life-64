@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
+#include <stddef.h>
 #include "font.h"
 #include "game.h"
 #include "menu.h"
@@ -22,12 +23,26 @@
 void snd_play(const char *sample, float volume, int channel);
 void snd_set_volume(float v);
 
-settings_t settings = {.control_scheme = 0, .invert_y = false, .look_sens = 5, .volume = 8,
+#define DEFAULT_BINDS { \
+    [BIND_FIRE] = PAD_Z, \
+    [BIND_JUMP] = PAD_R, \
+    [BIND_DUCK] = PAD_L, \
+    [BIND_USE] = PAD_B, \
+    [BIND_MODE_SHIFT] = PAD_A, \
+    [BIND_ALTFIRE] = PAD_Z, \
+    [BIND_RELOAD] = PAD_B, \
+    [BIND_FLASHLIGHT] = PAD_R \
+}
+
+settings_t settings = {.control_scheme = 1, .invert_y = false, .look_sens = 5, .volume = 8,
                        .show_stats = false, .crosshair = false, .cheats = false, .skill = 2,
-                       .bind = {PAD_Z, PAD_R, PAD_A, PAD_L, PAD_B, PAD_DD, PAD_DU, PAD_DL, PAD_DR}};
+                       .bind = DEFAULT_BINDS};
 
 // ---- button mapping (Options -> Controller Settings -> Button Mapping)
-const char *bind_names[NUM_BINDS] = {"Fire", "Alternate fire", "Jump", "Duck", "Use", "Reload", "Flashlight", "Previous weapon", "Next weapon"};
+const char *bind_names[NUM_BINDS] = {
+    "Fire", "Jump", "Duck", "Use", "Mode shift",
+    "Shift: alternate fire", "Shift: reload", "Shift: flashlight"
+};
 const char *pad_names[NUM_PADS] = {"A", "B", "Z", "L", "R", "D-pad up", "D-pad down", "D-pad left", "D-pad right", "C-up", "C-down", "C-left", "C-right",
                                    "Stick up", "Stick down", "Stick left", "Stick right", "X (GameCube)", "Y (GameCube)"};
 // the stick as four buttons, for the schemes where it doesn't move or look (pushed past half way)
@@ -38,27 +53,63 @@ void pad_stick_update(const joypad_inputs_t *in)
     stick_pressed = h & ~stick_held;
     stick_held = h;
 }
-// the scheme's own moving / looking inputs can't also be actions: an action on one of them moves to
-// the same direction on the input the scheme leaves free (D-pad <-> C buttons <-> stick)
-void settings_fit_binds(void)
+int settings_weapon_pad(void)
 {
-    int s = settings.control_scheme;
-    bool dpad_used = s == 3 || s == 4, c_used = s != 3, stick_used = s != 4;
+    switch (settings.control_scheme) {
+    case 3: return PAD_CU;
+    case 4: return PAD_SU;
+    default: return PAD_DU;
+    }
+}
+
+bool pad_remappable(int pad)
+{
+    // Every directional input belongs to movement, looking or weapon selection.
+    return (pad >= PAD_A && pad <= PAD_R) || pad == PAD_X || pad == PAD_Y;
+}
+
+void settings_validate_binds(void)
+{
     for (int i = 0; i < NUM_BINDS; i++) {
-        int b = settings.bind[i];
-        int grp = b >= PAD_DU && b <= PAD_DR ? 0 : b >= PAD_CU && b <= PAD_CR ? 1 : b >= PAD_SU && b <= PAD_SR ? 2 : -1;
-        if (grp < 0) continue;
-        int dir = b - (grp == 0 ? PAD_DU : grp == 1 ? PAD_CU : PAD_SU);
-        bool used = grp == 0 ? dpad_used : grp == 1 ? c_used : stick_used;
-        if (!used) continue;
-        int to = !dpad_used ? PAD_DU : !c_used ? PAD_CU : !stick_used ? PAD_SU : -1;
-        if (to >= 0) settings.bind[i] = to + dir;
+        if (!pad_remappable(settings.bind[i])) {
+            settings_default_binds();
+            return;
+        }
     }
 }
 void settings_default_binds(void)
 {
-    static const uint8_t def[NUM_BINDS] = {PAD_Z, PAD_R, PAD_A, PAD_L, PAD_B, PAD_DD, PAD_DU, PAD_DL, PAD_DR};
+    static const uint8_t def[NUM_BINDS] = DEFAULT_BINDS;
     memcpy(settings.bind, def, sizeof(def));
+}
+
+static bool bind_always_active(int action)
+{
+    return action == BIND_MODE_SHIFT || action == BIND_DUCK;
+}
+
+static void settings_remap_bind(int action, int button)
+{
+    if (!pad_remappable(button)) return;
+
+    int old_button = settings.bind[action];
+    bool swap_both_layers = bind_always_active(action);
+
+    for (int i = 0; i < NUM_BINDS; i++) {
+        if (settings.bind[i] == button && bind_always_active(i)) swap_both_layers = true;
+    }
+
+    // Always-active buttons must stay unique across both layers. Swapping the
+    // physical buttons everywhere preserves that rule and any shifted pairs.
+    for (int i = 0; i < NUM_BINDS; i++) {
+        bool same_layer = (i >= BIND_ALTFIRE) == (action >= BIND_ALTFIRE);
+        if (!swap_both_layers && !same_layer) continue;
+
+        if (settings.bind[i] == button) settings.bind[i] = old_button;
+        else if (swap_both_layers && settings.bind[i] == old_button) settings.bind[i] = button;
+    }
+
+    settings.bind[action] = button;
 }
 bool pad_held(const joypad_inputs_t *in, int pad)
 {
@@ -86,8 +137,14 @@ bool pad_pressed(const joypad_buttons_t *b, int pad)
 }
 // settings live in the last 2 KB of the 32 KB SRAM (the three save slots use 30 KB)
 #define SETTINGS_SRAM_OFS (3 * 10240)
-#define SETTINGS_MAGIC 0x484C5331   // "HLS1"
+#define SETTINGS_MAGIC_V1 0x484C5331 // "HLS1": original nine-action layout
+#define SETTINGS_MAGIC_V2 0x484C5332 // "HLS2": remappable weapon selection
+#define SETTINGS_MAGIC 0x484C5333    // "HLS3": implicit weapon-selection input
 typedef struct { uint32_t magic; settings_t s; } __attribute__((aligned(16))) settings_blob_t;
+// All versions retain the same field offsets and blob size. Old bindings are
+// migrated before use; the removed weapon bindings now occupy reserved bytes.
+_Static_assert(sizeof(settings_t) == 36, "Settings migration requires the v1 structure size");
+_Static_assert(offsetof(settings_t, bind) == 24, "Settings migration requires the v1 field offsets");
 #define SETTINGS_PAK_FILE "cpak1:/NHLE.01-HL64 CONFIG"
 bool game_pak_ready(void);
 // on the cartridge's save memory and, when one is in, on the Controller Pak (to take to another console)
@@ -109,19 +166,37 @@ void settings_load(void)
     sram_init();
     settings_blob_t b;
     bool got = false;
-    if (sram_detect() > 0) { sram_read(&b, SETTINGS_SRAM_OFS, sizeof(b)); got = b.magic == SETTINGS_MAGIC; }
+    if (sram_detect() > 0) {
+        sram_read(&b, SETTINGS_SRAM_OFS, sizeof(b));
+        got = b.magic == SETTINGS_MAGIC || b.magic == SETTINGS_MAGIC_V1 || b.magic == SETTINGS_MAGIC_V2;
+    }
     if (!got && game_pak_ready()) {   // a new cartridge (or one without save memory): the pak's copy
         FILE *f = fopen(SETTINGS_PAK_FILE, "rb");
-        if (f) { got = fread(&b, 1, sizeof(b), f) == sizeof(b) && b.magic == SETTINGS_MAGIC; fclose(f); }
+        if (f) {
+            got = fread(&b, 1, sizeof(b), f) == sizeof(b) &&
+                  (b.magic == SETTINGS_MAGIC || b.magic == SETTINGS_MAGIC_V1 || b.magic == SETTINGS_MAGIC_V2);
+            fclose(f);
+        }
     }
     if (!got) return;
     bool cheats = settings.cheats;
     settings = b.s;
     settings.cheats = cheats;
+    if (b.magic == SETTINGS_MAGIC_V1) {
+        settings.control_scheme = 1;
+        settings_default_binds();
+    } else if (b.magic == SETTINGS_MAGIC_V2) {
+        const uint8_t *old_binds = (const uint8_t *)&b.s + offsetof(settings_t, bind);
+        memcpy(settings.bind, old_binds, 5);
+        memcpy(settings.bind + BIND_ALTFIRE, old_binds + 9, 3);
+    }
+    memset(settings.reserved, 0, sizeof(settings.reserved));
     for (int i = 0; i < NUM_BINDS; i++) if (settings.bind[i] >= NUM_PADS) { settings_default_binds(); break; }
-    if (settings.control_scheme < 0 || settings.control_scheme >= NUM_SCHEMES) settings.control_scheme = 0;
+    if (settings.control_scheme < 0 || settings.control_scheme >= NUM_SCHEMES) settings.control_scheme = 1;
+    settings_validate_binds();
     if (settings.look_sens < 1 || settings.look_sens > 10) settings.look_sens = 5;
     if (settings.volume < 0 || settings.volume > 10) settings.volume = 8;
+    if (b.magic != SETTINGS_MAGIC) settings_save();
 }
 
 #define SW 320
@@ -605,13 +680,13 @@ menu_action_t menu_update(float dt, joypad_inputs_t in, joypad_buttons_t pressed
             if (lr < 0) {
                 if (settings.control_scheme > 0) {
                     settings.control_scheme--;
-                    settings_fit_binds();
+                    settings_validate_binds();
                     snd_play("ui/select.wav", 1.0f, 3);
                 }
             } else if (lr > 0) {
                 if (settings.control_scheme < NUM_SCHEMES - 1) {
                     settings.control_scheme++;
-                    settings_fit_binds();
+                    settings_validate_binds();
                     snd_play("ui/confirm.wav", 1.0f, 3);
                 }
             } else if (pressed.a || pressed.start) {
@@ -620,7 +695,7 @@ menu_action_t menu_update(float dt, joypad_inputs_t in, joypad_buttons_t pressed
                 } else {
                     settings.control_scheme = 0;
                 }
-                settings_fit_binds();
+                settings_validate_binds();
                 snd_play("ui/confirm.wav", 1.0f, 3);
             }
         } else if (ctrl_sel == 1) { // Advanced...
@@ -644,23 +719,16 @@ menu_action_t menu_update(float dt, joypad_inputs_t in, joypad_buttons_t pressed
     }
     case SCR_OPTIONS_BINDS: {
         if (bind_listen) {
-            // the next button pressed becomes this action's (Start cancels); the action that had
-            // that button takes this one's old button, so nothing is left unbound
+            // The next button becomes this action's (Start cancels). Conflicts
+            // swap within a layer, or across both layers for always-active actions.
             bind_listen_t += dt;
             if (pressed.start) { bind_listen = false; snd_play("ui/cancel.wav", 1.0f, 3); break; }
             if (bind_listen_t < 0.2f) break;
             pad_stick_update(&in);
             for (int p = 0; p < NUM_PADS; p++) {
                 if (!pad_pressed(&pressed, p)) continue;
-                {   // not one the control scheme moves or looks with
-                    int sc = settings.control_scheme;
-                    bool dpad_used = sc == 3 || sc == 4, c_used = sc != 3, stick_used = sc != 4;
-                    if ((p >= PAD_DU && p <= PAD_DR && dpad_used) || (p >= PAD_CU && p <= PAD_CR && c_used) ||
-                        (p >= PAD_SU && p <= PAD_SR && stick_used)) continue;
-                }
-                int old = settings.bind[bind_sel];
-                for (int j = 0; j < NUM_BINDS; j++) if (j != bind_sel && settings.bind[j] == p) settings.bind[j] = old;
-                settings.bind[bind_sel] = p;
+                if (!pad_remappable(p)) continue;
+                settings_remap_bind(bind_sel, p);
                 bind_listen = false;
                 snd_play("ui/confirm.wav", 1.0f, 3);
                 break;
@@ -672,7 +740,7 @@ menu_action_t menu_update(float dt, joypad_inputs_t in, joypad_buttons_t pressed
         if (pressed.b) { snd_play("ui/cancel.wav", 1.0f, 3); screen = SCR_OPTIONS_CTRL; settings_save(); break; }
         if (pressed.a) {
             snd_play("ui/confirm.wav", 1.0f, 3);
-            if (bind_sel == NUM_BINDS) { settings_default_binds(); settings_fit_binds(); }
+            if (bind_sel == NUM_BINDS) { settings_default_binds(); settings_validate_binds(); }
             else { bind_listen = true; bind_listen_t = 0; }
         }
         break;
@@ -1752,7 +1820,7 @@ static void draw_button_mapping(void)
 {
     draw_title_hl();
     ui_load_common();
-    int hx = 28, x = 38, vx = 196, y = 80, step = 13;
+    int hx = 28, x = 24, vx = 196, y = 80, step = 13;
     ui_header(hx, 58, "Button Mapping");
     for (int i = 0; i <= NUM_BINDS; i++) {
         int ry = y + i * step + (i == NUM_BINDS ? 4 : 0);
@@ -2447,11 +2515,11 @@ static void draw_options_legacy(void)
     if (opt_tab == 0) {
         // the controls, two columns filling the space under the options
         static const char *help[NUM_SCHEMES][8] = {
-            {"Stick: move", "C buttons: look", "Z: fire", "R: alt fire", "A: jump (hold: tuck)", "L: duck", "B: use", "D-pad: guns, reload, light"},
-            {"Stick: look", "C buttons: move", "Z: fire", "R: alt fire", "A: jump (hold: tuck)", "L: duck", "B: use", "D-pad: guns, reload, light"},
-            {"Stick: move / turn", "C buttons: look / strafe", "Z: fire", "R: alt fire", "A: jump (hold: tuck)", "L: duck", "B: use", "D-pad: guns, reload, light"},
-            {"D-pad: move", "Stick: look", "Z: fire", "R: alt fire", "A: jump (hold: tuck)", "L: duck", "B: use", "C buttons: guns, reload, light"},
-            {"D-pad: move", "C buttons: look", "Z: fire", "R: alt fire", "A: jump (hold: tuck)", "L: duck", "B: use", "Stick: guns, reload, light"},
+            {"Stick: move", "C buttons: look", "Z: fire; A+Z: alt", "R: jump; A+R: light", "B: use; A+B: reload", "L: duck; A: shift", "D-pad L/R: category", "D-pad U/D: weapon"},
+            {"Stick: look", "C buttons: move", "Z: fire; A+Z: alt", "R: jump; A+R: light", "B: use; A+B: reload", "L: duck; A: shift", "D-pad L/R: category", "D-pad U/D: weapon"},
+            {"Stick: move / turn", "C buttons: look / strafe", "Z: fire; A+Z: alt", "R: jump; A+R: light", "B: use; A+B: reload", "L: duck; A: shift", "D-pad L/R: category", "D-pad U/D: weapon"},
+            {"D-pad: move", "Stick: look", "Z: fire; A+Z: alt", "R: jump; A+R: light", "B: use; A+B: reload", "L: duck; A: shift", "C L/R: category", "C U/D: weapon"},
+            {"D-pad: move", "C buttons: look", "Z: fire; A+Z: alt", "R: jump; A+R: light", "B: use; A+B: reload", "L: duck; A: shift", "Stick L/R: category", "Stick U/D: weapon"},
         };
         int lh = font_height(FONT_SMALL), top = y + 40 + no * 16 + 2;
         for (int k = 0; k < 8; k++)
