@@ -1072,7 +1072,7 @@ void PM_WalkMove ()
 //
 // Clamp to server defined max speed
 //
-	if (wishspeed > pmove->maxspeed)
+	if (wishspeed > pmove->maxspeed && wishspeed > 0)
 	{
 		VectorScale (wishvel, pmove->maxspeed/wishspeed, wishvel);
 		wishspeed = pmove->maxspeed;
@@ -1347,7 +1347,7 @@ void PM_WaterMove (void)
 	wishspeed = VectorNormalize(wishdir);
 
 	// Cap speed.
-	if (wishspeed > pmove->maxspeed)
+	if (wishspeed > pmove->maxspeed && wishspeed > 0)
 	{
 		VectorScale (wishvel, pmove->maxspeed/wishspeed, wishvel);
 		wishspeed = pmove->maxspeed;
@@ -1446,7 +1446,7 @@ void PM_AirMove (void)
 	wishspeed = VectorNormalize(wishdir);
 
 	// Clamp to server defined max speed
-	if (wishspeed > pmove->maxspeed)
+	if (wishspeed > pmove->maxspeed && wishspeed > 0)
 	{
 		VectorScale (wishvel, pmove->maxspeed/wishspeed, wishvel);
 		wishspeed = pmove->maxspeed;

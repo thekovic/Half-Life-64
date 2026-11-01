@@ -915,7 +915,7 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
     switch (settings.control_scheme) {
     case 0: {
         // stick = move (analog), C buttons = look (cl_yawspeed 210, cl_pitchspeed 225, with a
-        // short ramp so taps can aim precisely), D-pad = move
+        // short ramp so taps can aim precisely)
         fwd = sy * speed;
         side = sx * speed;
         if (joypad_get_style(cur_port) == JOYPAD_STYLE_GCN) {   // the GameCube C-stick is analog
@@ -934,7 +934,7 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         break;
     }
     case 1: {
-        // stick = look (accelerating curve), C buttons / d-pad = move
+        // stick = look (accelerating curve), C buttons = move
         float yawrate = (200.0f * sx * fabsf(sx) + 40.0f * sx) * sens;
         float pitchrate = (140.0f * sy * fabsf(sy) + 30.0f * sy) * sens;
         view_angles[1] -= yawrate * dt;
@@ -1009,7 +1009,7 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         if (!y_bound && in.btn.y) input.buttons |= IN_USE;
     }
     weapon_select = pad_pressed(&pressed, bd[BIND_NEXTWEAP]) ? 1 : (pad_pressed(&pressed, bd[BIND_PREVWEAP]) ? -1 : 0);
-    if (pad_pressed(&pressed, bd[BIND_FLASHLIGHT]) && !(settings.cheats && b_duck)) player_toggle_flashlight();
+    if (pad_pressed(&pressed, bd[BIND_FLASHLIGHT]) && !(settings.cheats && b_duck && b_jump)) player_toggle_flashlight();
     // driving a train: forward/back change speed in steps, a deliberate sidestep gets off
     if (ents_player_driving()) {
         if (fwd > speed * 0.5f) input.buttons |= IN_FORWARD;
@@ -1036,9 +1036,9 @@ static void build_input(float dt, joypad_inputs_t in, joypad_buttons_t pressed)
         if (b_jump) input.up += speed;
         if (b_duck) input.up -= speed;
     }
-    // cheats: duck + flashlight toggles noclip, duck + reload gives every weapon (impulse 101)
-    if (settings.cheats && b_duck && pad_pressed(&pressed, bd[BIND_FLASHLIGHT])) noclip = !noclip;
-    if ((settings.cheats && b_duck && pad_pressed(&pressed, bd[BIND_RELOAD])) || dbg_give_all) {
+    // cheats: duck + jump + flashlight toggles noclip, duck + jump + reload gives every weapon (impulse 101)
+    if (settings.cheats && b_duck && b_jump && pad_pressed(&pressed, bd[BIND_FLASHLIGHT])) noclip = !noclip;
+    if ((settings.cheats && b_duck && b_jump && pad_pressed(&pressed, bd[BIND_RELOAD])) || dbg_give_all) {
         dbg_give_all = false;
         static const char *all[] = {"item_suit", "weapon_crowbar", "weapon_9mmhandgun", "weapon_357", "weapon_9mmAR", "weapon_shotgun",
                                     "weapon_crossbow", "weapon_rpg", "weapon_gauss", "weapon_egon", "weapon_hornetgun",

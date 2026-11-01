@@ -2,9 +2,9 @@
 # Requires: libdragon (preview branch) + tiny3d.  See README.md.
 BUILD_DIR = build
 SOURCE_DIR = src
-T3D_INST ?= $(HOME)/tiny3d
+
 include $(N64_INST)/include/n64.mk
-include $(T3D_INST)/t3d.mk
+include $(N64_INST)/include/t3d.mk
 
 N64_ROM_TITLE = "HALF-LIFE 64"
 N64_ROM_SAVETYPE = sram256k
