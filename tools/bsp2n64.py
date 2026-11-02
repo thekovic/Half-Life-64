@@ -21,7 +21,52 @@ Output is big-endian (the VR4300 runs big-endian).
 Usage: bsp2n64.py map.bsp out.hlb [--wad path.wad ...] [--grid 64] [--maxtexels 2048]
 """
 import struct, sys, os, math, argparse
+import threading
+import time
 import numpy as np
+
+
+class Progress:
+    """Line-based progress with a heartbeat even while a single task takes minutes."""
+
+    def __init__(self, label, total=None, interval=10):
+        self.label = label
+        self.total = total
+        self.interval = interval
+        self.completed = 0
+        self.detail = 'starting'
+        self.started = time.monotonic()
+        self.stopped = threading.Event()
+        self.lock = threading.Lock()
+
+    def _report(self):
+        elapsed = int(time.monotonic() - self.started)
+        count = '' if self.total is None else ' %d/%d' % (self.completed, self.total)
+        print('%s%s [%dm %02ds]: %s' % (
+            self.label, count, elapsed // 60, elapsed % 60, self.detail), flush=True)
+
+    def update(self, detail, advance=False, quiet=False):
+        with self.lock:
+            self.detail = detail
+            self.completed += int(advance)
+            if not quiet:
+                self._report()
+
+    def _heartbeat(self):
+        while not self.stopped.wait(self.interval):
+            with self.lock:
+                self._report()
+
+    def __enter__(self):
+        self._report()
+        self.thread = threading.Thread(target=self._heartbeat, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stopped.set()
+        self.thread.join()
+        self.update('finished' if exc_type is None else 'failed')
 
 LUMP_NAMES = ['ENTITIES', 'PLANES', 'TEXTURES', 'VERTICES', 'VISIBILITY', 'NODES',
               'TEXINFO', 'FACES', 'LIGHTING', 'CLIPNODES', 'LEAVES', 'MARKSURFACES',
@@ -281,7 +326,14 @@ def choose_grid(lm, bmin, finest, tol):
     return finest
 
 
-def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_tolerance=12):
+def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_tolerance=12, progress=None):
+    def report(stage):
+        if progress is not None:
+            progress(stage)
+        elif verbose:
+            print('%s: %s' % (os.path.basename(bsp_path), stage), flush=True)
+
+    report('reading BSP')
     data = open(bsp_path, 'rb').read()
     bsp = BSP(data)
 
@@ -303,6 +355,7 @@ def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_toleranc
     vis = bsp.raw('VISIBILITY')
 
     # ---- textures
+    report('converting textures')
     traw = bsp.raw('TEXTURES')
     ntex = struct.unpack_from('<i', traw, 0)[0]
     toffs = struct.unpack_from('<%di' % ntex, traw, 4)
@@ -356,6 +409,7 @@ def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_toleranc
                 style_on[st] = 0.0 if off else 1.0
 
     # ---- per-face geometry
+    report('subdividing faces and sampling lighting')
     out_faces, out_chunks, out_verts, out_idx, out_facetex = [], [], [], [], []
     dyn_recs = []   # (vertex index, (base rgb, [(style, rgb)...]))
     face_jobs = {}
@@ -428,6 +482,7 @@ def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_toleranc
     # ---- T-junction removal (like qbsp's tjunc.c): insert every vertex that lies on a polygon
     # edge into that edge, per brush model, so neighbouring polygons share edges exactly.
     CELL = 64.0
+    report('removing T-junctions')
     for m in models:
         ff, nf = m[14], m[15]
         grid_pts = {}
@@ -495,6 +550,7 @@ def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_toleranc
             job['pieces'] = newpieces
 
     # ---- build vertices / chunks
+    report('building vertices and chunks')
     for fi in range(len(faces)):
         job = face_jobs.get(fi)
         if not job:
@@ -599,6 +655,7 @@ def convert(bsp_path, out_path, wads, grid, maxtexels, verbose=True, lm_toleranc
                          len(out_chunks) - first_chunk)
 
     # ---- write
+    report('serializing map data')
     blobs = {}
 
     blobs['planes'] = b''.join(struct.pack(E + '4fB3x', p[0], p[1], p[2], p[3], p[4]) for p in planes)
@@ -729,7 +786,7 @@ def write_hlb(res, out_path, texpack=None, verbose=True):
         st = res['stats']
         print('%s: %d faces, %d tris, %d verts, %d textures, %d KB  grids %s' % (
             res['name'], st['faces'], st['tris'], st['verts'], len(res['textures']), len(out) // 1024,
-            dict(sorted(st.get('grids', {}).items()))))
+            dict(sorted(st.get('grids', {}).items()))), flush=True)
     return out
 
 
@@ -744,4 +801,8 @@ if __name__ == '__main__':
     a = ap.parse_args()
     if a.little_endian:
         E = '<'
-    write_hlb(convert(a.bsp, a.out, a.wad, a.grid, a.maxtexels, lm_tolerance=a.tol), a.out)
+    with Progress('Converting %s' % os.path.basename(a.bsp)) as progress:
+        result = convert(a.bsp, a.out, a.wad, a.grid, a.maxtexels,
+                         lm_tolerance=a.tol, progress=progress.update)
+        progress.update('writing HLB')
+        write_hlb(result, a.out)

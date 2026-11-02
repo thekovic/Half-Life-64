@@ -19,6 +19,7 @@ import mdl2n64
 import ui2n64
 import spr2n64
 import re, struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CAMPAIGN = """c0a0 c0a0a c0a0b c0a0c c0a0d c0a0e c1a0 c1a0d c1a0a c1a0b c1a0e c1a0c c1a1 c1a1a c1a1f c1a1b c1a1c
 c1a1d c1a2 c1a2a c1a2b c1a2c c1a2d c1a3 c1a3a c1a3b c1a3c c1a3d c1a4 c1a4k c1a4b c1a4f c1a4d c1a4e c1a4i
@@ -62,37 +63,41 @@ def asset_size_ok(path):
     return vals[0] + pos + (pos & 1) == os.path.getsize(path)
 
 
-def compress_files(level, files, jobs=1):
+def compress_files(level, files, jobs=1, label='Compressing assets'):
     """libdragon asset compression of files, in place. mkasset writes into a separate folder and
     the results then replace the originals: compressing a file onto itself left the old file's
     tail after the compressed data on Windows (asset_load then fails: "Wrong compressed size").
     Each result is checked against its header; a file that doesn't match stays uncompressed."""
-    import struct as _st
-    from concurrent.futures import ThreadPoolExecutor
     mk = shutil.which('mkasset') or os.path.join(os.environ.get('N64_INST', '/opt/libdragon'), 'bin', 'mkasset')
     files = list(files)
     if not files:
         return
     tmp = tempfile.mkdtemp(prefix='hl64_mkasset_', dir=os.path.dirname(os.path.abspath(files[0])))
     try:
-        chunks = [files[i::jobs] for i in range(jobs)]
-        def run(fl):
-            # (a few files per call keeps the command line well under Windows' limit)
-            for i in range(0, len(fl), 40):
-                subprocess.run([mk, '-c', str(level), '-w', '256', '-o', slashes(tmp)] + [slashes(f) for f in fl[i:i + 40]], capture_output=True)
-        with ThreadPoolExecutor(jobs) as ex:
-            list(ex.map(run, [c for c in chunks if c]))
+        def run(path):
+            subprocess.run([mk, '-c', str(level), '-w', '256', '-o', slashes(tmp), slashes(path)],
+                           capture_output=True, text=True, check=True)
+            return path
+
         bad = 0
-        for f in files:
-            c = os.path.join(tmp, os.path.basename(f))
-            try:
-                ok = asset_size_ok(c)
-            except OSError:
-                ok = False
-            if ok:
-                os.replace(c, f)
-            else:
-                bad += 1
+        with ThreadPoolExecutor(jobs) as ex, bsp2n64.Progress(label, len(files)) as progress:
+            futures = [ex.submit(run, path) for path in files]
+            for future in as_completed(futures):
+                path = future.result()
+                compressed = os.path.join(tmp, os.path.basename(path))
+                try:
+                    ok = asset_size_ok(compressed)
+                except (OSError, IndexError):
+                    ok = False
+
+                if ok:
+                    os.replace(compressed, path)
+                else:
+                    bad += 1
+
+                progress.update('%s %s (%d KB)' % (
+                    os.path.basename(path), 'compressed' if ok else 'left uncompressed',
+                    os.path.getsize(path) // 1024), advance=True)
         if bad:
             print('compression: %d files left uncompressed (mkasset output didn\'t check out)' % bad)
     finally:
@@ -175,14 +180,15 @@ def build_models(a, maps):
             continue
         jobs.append((path, os.path.join(a.out, 'models', mdl + '.hlm'), sorted(names | ws)))
     outs = []
-    with Pool(a.j) as pool:
+    with Pool(a.j) as pool, bsp2n64.Progress('Converting models', len(jobs)) as progress:
         for out, err in pool.imap_unordered(model_conv, jobs):
             if err:
                 print('model %s failed: %s' % (os.path.basename(out), err))
             else:
                 outs.append(out)
+            progress.update('%s %s' % (os.path.basename(out), 'failed' if err else 'converted'), advance=True)
     if outs and not a.no_compress:
-        compress_files(2, outs, a.j)
+        compress_files(2, outs, a.j, label='Compressing models')
     print('models: %d, %.1f MB' % (len(outs), sum(os.path.getsize(o) for o in outs) / 1048576))
 
 
@@ -215,10 +221,12 @@ def build_nav(a, maps):
         exe = os.path.join(tempfile.gettempdir(), 'hl64_navgen')
         subprocess.run(['cc', '-O2', '-o', exe, os.path.join(here, 'navgen.c'), '-lm'], check=True)
     n = 0
-    for m in maps:
-        r = subprocess.run([exe, bsp2n64.map_path(a.valve, m), os.path.join(a.out, 'maps', m + '.nav')],
-                           capture_output=True, text=True)
-        n += r.returncode == 0
+    with bsp2n64.Progress('Building node graphs', len(maps)) as progress:
+        for m in maps:
+            r = subprocess.run([exe, bsp2n64.map_path(a.valve, m), os.path.join(a.out, 'maps', m + '.nav')],
+                               capture_output=True, text=True)
+            n += r.returncode == 0
+            progress.update('%s %s' % (m, 'built' if r.returncode == 0 else 'failed'), advance=True)
     print('node graphs: %d maps' % n)
 
 
@@ -380,10 +388,12 @@ def main():
     pack = bsp2n64.TexturePack()
     jobs = [(bsp2n64.map_path(a.valve, m), wads, a.grid, a.tol) for m in allmaps]
     total = 0
-    with Pool(a.j) as pool:
+    with Pool(a.j) as pool, bsp2n64.Progress('Converting maps', len(jobs)) as progress:
+        # Keep campaign order: texture-pack offsets must not depend on worker timing.
         for res in pool.imap(work, jobs):
-            out = bsp2n64.write_hlb(res, os.path.join(a.out, 'maps', res['name'] + '.hlb'), pack)
+            out = bsp2n64.write_hlb(res, os.path.join(a.out, 'maps', res['name'] + '.hlb'), pack, verbose=False)
             total += len(out)
+            progress.update('%s written (%d KB)' % (res['name'], len(out) // 1024), advance=True)
     open(os.path.join(a.out, 'textures.pak'), 'wb').write(pack.data)
     # compress maps (libdragon asset compression; asset_load() decompresses on the N64).
     # Level 3 (Shrinkler) is ~20% smaller than level 2 (aPLib) and is needed to leave room on
@@ -391,7 +401,8 @@ def main():
     if not a.no_compress:
         mapdir = os.path.join(a.out, 'maps')
         files = [os.path.join(mapdir, m + '.hlb') for m in allmaps]
-        compress_files(a.compress_level, files, a.j)
+        label = 'Compressing maps (level %d; this can take several minutes)' % a.compress_level
+        compress_files(a.compress_level, files, a.j, label=label)
         csize = sum(os.path.getsize(f) for f in files)
         print('compressed maps: %.1f MB' % (csize / 1048576))
     open(os.path.join(a.out, 'maps', 'maplist.txt'), 'w', newline='\n').write('\n'.join(maps) + '\n')
@@ -610,12 +621,16 @@ def build_sounds(a):
         jobs.append((conv, f, os.path.join(a.out, 'music'),
                      ['--wav-mono', '--wav-resample', '22050', '--wav-compress', 'ulc,quality=%d' % Q_MUSIC]))
     ok = 0
-    with Pool(a.j) as pool:
+    with Pool(a.j) as pool, bsp2n64.Progress('Converting sounds and music', len(jobs)) as progress:
         for src, rc, err in pool.imap_unordered(_conv_one, jobs, chunksize=8):
             if rc == 0:
                 ok += 1
             else:
                 print('audioconv64 failed for', os.path.relpath(src, a.valve), err)
+            # Thousands of sounds: report counts in batches instead of flooding stdout.
+            completed = progress.completed + 1
+            progress.update('latest: %s' % os.path.basename(src), advance=True,
+                            quiet=completed % 100 != 0 and completed != len(jobs))
     def du(d):
         return sum(os.path.getsize(os.path.join(r, x)) for r, _, fs in os.walk(d) for x in fs)
     print('sounds: %d/%d converted; sound %.1f MB, music %.1f MB' % (
